@@ -95,6 +95,10 @@ class OptimizationParams(ParamGroup):
         self.densify_grad_threshold = 0.0002
         self.depth_l1_weight_init = 1.0
         self.depth_l1_weight_final = 0.01
+        # Convergence regularization: encourage Gaussians to cluster locally
+        self.lambda_converge = 0.2
+        # Number of nearest neighbors to use for convergence loss
+        self.converge_knn = 5
         self.random_background = False
         self.optimizer_type = "default"
         super().__init__(parser, "Optimization Parameters")

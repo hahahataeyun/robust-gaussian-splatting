@@ -138,7 +138,37 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             Ll1depth = Ll1depth.item()
         else:
             Ll1depth = 0
-
+        
+        # Convergence regularization: encourage visible Gaussians to move closer to their local neighbors
+        # This is computed only on the set of Gaussians that were visible in the current render (visibility_filter)
+        # to limit cost. The term is: mean(||x_i - mean(neighbors(x_i))||^2)
+        if getattr(opt, 'lambda_converge', 0.0) > 0:
+            try:
+                vis_mask = visibility_filter
+                # Ensure mask is boolean and on same device
+                if vis_mask is not None and vis_mask.sum() > 1:
+                    xyz_all = gaussians.get_xyz
+                    visible_xyz = xyz_all[vis_mask]
+                    V = visible_xyz.shape[0]
+                    # number of neighbors (at most V-1)
+                    k = min(int(getattr(opt, 'converge_knn', 5)), max(1, V - 1))
+                    # pairwise distances among visible points
+                    dists = torch.cdist(visible_xyz, visible_xyz)
+                    # ignore self-distance by setting diagonal large
+                    if dists.size(0) > 0:
+                        diag = torch.arange(dists.size(0), device=dists.device)
+                        dists[diag, diag] = 1e9
+                    # get indices of k nearest neighbors
+                    knn_idx = torch.topk(dists, k=k, largest=False).indices  # (V, k)
+                    # gather neighbor coordinates -> shape (V, k, 3)
+                    neighbors = visible_xyz[knn_idx]
+                    neighbor_mean = neighbors.mean(dim=1)  # (V, 3)
+                    converge_loss = ((visible_xyz - neighbor_mean) ** 2).sum(dim=1).mean()
+                    loss = loss + getattr(opt, 'lambda_converge', 0.0) * converge_loss
+            except Exception:
+                # fail-safe: if anything goes wrong (shapes, cuda) skip convergence loss for this iter
+                pass
+ 
         loss.backward()
 
         iter_end.record()
@@ -166,6 +196,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
+                # Perform densification and pruning every densification_interval iterations after densify_from_iter
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
