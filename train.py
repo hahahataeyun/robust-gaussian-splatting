@@ -143,31 +143,42 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # This is computed only on the set of Gaussians that were visible in the current render (visibility_filter)
         # to limit cost. The term is: mean(||x_i - mean(neighbors(x_i))||^2)
         if getattr(opt, 'lambda_converge', 0.0) > 0:
-            try:
-                vis_mask = visibility_filter
-                # Ensure mask is boolean and on same device
-                if vis_mask is not None and vis_mask.sum() > 1:
-                    xyz_all = gaussians.get_xyz
-                    visible_xyz = xyz_all[vis_mask]
-                    V = visible_xyz.shape[0]
-                    # number of neighbors (at most V-1)
-                    k = min(int(getattr(opt, 'converge_knn', 5)), max(1, V - 1))
-                    # pairwise distances among visible points
-                    dists = torch.cdist(visible_xyz, visible_xyz)
-                    # ignore self-distance by setting diagonal large
-                    if dists.size(0) > 0:
-                        diag = torch.arange(dists.size(0), device=dists.device)
-                        dists[diag, diag] = 1e9
-                    # get indices of k nearest neighbors
-                    knn_idx = torch.topk(dists, k=k, largest=False).indices  # (V, k)
-                    # gather neighbor coordinates -> shape (V, k, 3)
-                    neighbors = visible_xyz[knn_idx]
-                    neighbor_mean = neighbors.mean(dim=1)  # (V, 3)
-                    converge_loss = ((visible_xyz - neighbor_mean) ** 2).sum(dim=1).mean()
-                    loss = loss + getattr(opt, 'lambda_converge', 0.0) * converge_loss
-            except Exception:
-                # fail-safe: if anything goes wrong (shapes, cuda) skip convergence loss for this iter
-                pass
+            converge_interval = int(getattr(opt, 'converge_interval', 10))
+            if converge_interval > 0 and iteration % converge_interval == 0:
+                try:
+                    vis_filter = visibility_filter
+                    if vis_filter is not None:
+                        xyz_all = gaussians.get_xyz
+                        # Renderer returns indices (nonzero) possibly on CPU; move/flatten for consistent indexing
+                        vis_filter = vis_filter.to(xyz_all.device, non_blocking=True)
+                        visible_xyz = None
+                        if vis_filter.dtype == torch.bool:
+                            visible_xyz = xyz_all[vis_filter]
+                        else:
+                            vis_indices = vis_filter.reshape(-1)
+                            if vis_indices.numel() > 0:
+                                vis_indices = vis_indices.long()
+                                visible_xyz = xyz_all.index_select(0, vis_indices)
+                        if visible_xyz is not None and visible_xyz.shape[0] > 1:
+                            visible_xyz = visible_xyz.reshape(visible_xyz.shape[0], -1).contiguous()
+                            max_points = int(getattr(opt, 'converge_max_points', 4096))
+                            if max_points > 0 and visible_xyz.shape[0] > max_points:
+                                perm = torch.randperm(visible_xyz.shape[0], device=visible_xyz.device)
+                                visible_xyz = visible_xyz.index_select(0, perm[:max_points])
+                            V = visible_xyz.shape[0]
+                            if V > 1:
+                                k = min(int(getattr(opt, 'converge_knn', 5)), V - 1)
+                                if k > 0:
+                                    dists = torch.cdist(visible_xyz, visible_xyz, p=2)
+                                    dists.fill_diagonal_(float('inf'))
+                                    knn_idx = torch.topk(dists, k=k, largest=False).indices
+                                    neighbors = visible_xyz[knn_idx]
+                                    neighbor_mean = neighbors.mean(dim=1)
+                                    converge_loss = (visible_xyz - neighbor_mean).pow(2).sum(dim=1).mean()
+                                    loss = loss + getattr(opt, 'lambda_converge', 0.0) * converge_loss
+                except Exception:
+                    # fail-safe: if anything goes wrong (shapes, cuda) skip convergence loss for this iter
+                    pass
  
         loss.backward()
 
