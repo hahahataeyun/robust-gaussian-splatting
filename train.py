@@ -175,7 +175,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                                     neighbors = visible_xyz[knn_idx]
                                     neighbor_mean = neighbors.mean(dim=1)
                                     converge_loss = (visible_xyz - neighbor_mean).pow(2).sum(dim=1).mean()
-                                    loss = loss + getattr(opt, 'lambda_converge', 0.0) * converge_loss
+                                    loss = (1 - getattr(opt, 'lambda_converge', 0.0)) * loss + getattr(opt, 'lambda_converge', 0.0) * converge_loss
                 except Exception:
                     # fail-safe: if anything goes wrong (shapes, cuda) skip convergence loss for this iter
                     pass
@@ -238,6 +238,9 @@ def prepare_output_and_logger(args):
         else:
             unique_str = str(uuid.uuid4())
         args.model_path = os.path.join("./output/", unique_str[0:10])
+        # object = args.source_path.split(os.sep)[-1]
+
+        # args.model_path = os.path.join("./output/", object, "lambda_convergence_", str(args.lambda_converge), "knn_", str(args.converge_knn), "_interval_", str(args.converge_interval))
         
     # Set up output folder
     print("Output folder: {}".format(args.model_path))

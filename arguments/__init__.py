@@ -96,7 +96,7 @@ class OptimizationParams(ParamGroup):
         self.depth_l1_weight_init = 1.0
         self.depth_l1_weight_final = 0.01
         # Convergence regularization: encourage Gaussians to cluster locally
-        self.lambda_converge = 0.5
+        self.lambda_converge = 0.0
         # Number of nearest neighbors to use for convergence loss
         self.converge_knn = 5
         # How often (in iterations) to apply the convergence loss; 0 disables it
