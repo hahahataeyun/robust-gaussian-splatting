@@ -100,7 +100,7 @@ class OptimizationParams(ParamGroup):
         # Number of nearest neighbors to use for convergence loss
         self.converge_knn = 5
         # How often (in iterations) to apply the convergence loss; 0 disables it
-        self.converge_interval = 10
+        self.converge_interval = 5
         # Maximum number of visible points to include when computing convergence loss (sampled if exceeded)
         self.converge_max_points = 4096
         self.random_background = False

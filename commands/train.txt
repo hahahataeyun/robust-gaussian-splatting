@@ -1,0 +1,17 @@
+python train.py -s data\suitcase
+
+python train.py -s data\nerf_synthetic\nerf_synthetic\mic -m output\nerf_mic_noconv --eval -w
+
+python render.py -m output\nerf_lego_noconv --eval --skip_train
+
+python metrics.py -m output\nerf_lego_noconv
+
+
+
+python train.py -s data\nerf_synthetic\nerf_synthetic\lego -m output\nerf_lego_convreg_0.5_interval_5_knn_10 --eval --lambda_converge 0.5 --converge_interval 5 --converge_knn 10 && python render.py -m output\nerf_lego_convreg_0.5_interval_5_knn_10 --eval --skip_train && python metrics.py -m output\nerf_lego_nerf_lego_convreg_0.5_interval_5_knn_10
+
+python train.py -s data\nerf_synthetic\nerf_synthetic\lego -m output\nerf_lego_color --eval --color_inconsistency_weight 0.4 && python render.py -m output\nerf_lego_color --eval --skip_train && python metrics.py -m output\nerf_lego_nerf_lego_color
+
+
+
+python train.py -s data\suitcase -m output\suitcase_convreg_0.5_interval_5_eval --eval --lambda_converge 0.5 --converge_interval 5 && python render.py -m output\suitcase_convreg_0.5_interval_5_eval --eval --skip_train && python metrics.py -m output\suitcase_convreg_0.5_interval_5_eval

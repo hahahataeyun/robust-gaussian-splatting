@@ -46,7 +46,7 @@ try:
     print("Fast knn module found for convergence loss")
 except Exception:
     FAST_KNN_AVAILABLE = False
-    print*("Fast knn module not found for convergence loss, using torch cdist")
+    print("Fast knn module not found for convergence loss, using torch cdist")
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
 
