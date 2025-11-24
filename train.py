@@ -40,6 +40,14 @@ try:
 except:
     SPARSE_ADAM_AVAILABLE = False
 
+try:
+    from simple_knn._C import knn_idx as fast_knn_idx
+    FAST_KNN_AVAILABLE = True
+    print("Fast knn module found for convergence loss")
+except Exception:
+    FAST_KNN_AVAILABLE = False
+    print*("Fast knn module not found for convergence loss, using torch cdist")
+
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
 
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
@@ -148,31 +156,40 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 try:
                     vis_filter = visibility_filter
                     if vis_filter is not None:
-                        xyz_all = gaussians.get_xyz
+                        xyz_all = gaussians.get_xyz # (N, 3) (float32 on CUDA)
                         # Renderer returns indices (nonzero) possibly on CPU; move/flatten for consistent indexing
                         vis_filter = vis_filter.to(xyz_all.device, non_blocking=True)
                         visible_xyz = None
                         if vis_filter.dtype == torch.bool:
-                            visible_xyz = xyz_all[vis_filter]
+                            visible_xyz = xyz_all[vis_filter] # (V, 3) where V = number of visible points
                         else:
                             vis_indices = vis_filter.reshape(-1)
                             if vis_indices.numel() > 0:
                                 vis_indices = vis_indices.long()
                                 visible_xyz = xyz_all.index_select(0, vis_indices)
                         if visible_xyz is not None and visible_xyz.shape[0] > 1:
-                            visible_xyz = visible_xyz.reshape(visible_xyz.shape[0], -1).contiguous()
+                            visible_xyz = visible_xyz.reshape(visible_xyz.shape[0], -1).contiguous() # (V, 3)
                             max_points = int(getattr(opt, 'converge_max_points', 4096))
                             if max_points > 0 and visible_xyz.shape[0] > max_points:
-                                perm = torch.randperm(visible_xyz.shape[0], device=visible_xyz.device)
-                                visible_xyz = visible_xyz.index_select(0, perm[:max_points])
-                            V = visible_xyz.shape[0]
+                                perm = torch.randperm(visible_xyz.shape[0], device=visible_xyz.device) # if too many points, randomly subsample
+                                visible_xyz = visible_xyz.index_select(0, perm[:max_points]) # (max_points, 3)
+                            V = visible_xyz.shape[0] # number of visible points considered
                             if V > 1:
-                                k = min(int(getattr(opt, 'converge_knn', 5)), V - 1)
+                                k = min(int(getattr(opt, 'converge_knn', 5)), V - 1) # number of neighbors
                                 if k > 0:
-                                    dists = torch.cdist(visible_xyz, visible_xyz, p=2)
-                                    dists.fill_diagonal_(float('inf'))
-                                    knn_idx = torch.topk(dists, k=k, largest=False).indices
-                                    neighbors = visible_xyz[knn_idx]
+                                    neighbors = None
+                                    if FAST_KNN_AVAILABLE:
+                                        print("Using fast knn for convergence loss")
+                                        try:
+                                            knn_idx = fast_knn_idx(visible_xyz, k)
+                                            neighbors = visible_xyz[knn_idx]
+                                        except Exception:
+                                            neighbors = None
+                                    if neighbors is None:
+                                        dists = torch.cdist(visible_xyz, visible_xyz, p=2)
+                                        dists.fill_diagonal_(float('inf'))
+                                        knn_idx = torch.topk(dists, k=k, largest=False).indices
+                                        neighbors = visible_xyz[knn_idx]
                                     neighbor_mean = neighbors.mean(dim=1)
                                     converge_loss = (visible_xyz - neighbor_mean).pow(2).sum(dim=1).mean()
                                     loss = (1 - getattr(opt, 'lambda_converge', 0.0)) * loss + getattr(opt, 'lambda_converge', 0.0) * converge_loss

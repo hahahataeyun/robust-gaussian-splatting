@@ -30,6 +30,7 @@ except:
 class GaussianModel:
 
     def setup_functions(self):
+        # Build covariance from scaling and rotation 
         def build_covariance_from_scaling_rotation(scaling, scaling_modifier, rotation):
             L = build_scaling_rotation(scaling_modifier * scaling, rotation)
             actual_covariance = L @ L.transpose(1, 2)
