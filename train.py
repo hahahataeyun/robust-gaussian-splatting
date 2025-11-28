@@ -22,11 +22,19 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
 except ImportError:
     TENSORBOARD_FOUND = False
+
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
 
 try:
     from fused_ssim import fused_ssim
@@ -48,6 +56,35 @@ except Exception:
     FAST_KNN_AVAILABLE = False
     print("Fast knn module not found for convergence loss, using torch cdist")
 
+def init_wandb(dataset, opt):
+    
+    if not WANDB_AVAILABLE:
+        print("wandb not available: skipping wandb logging.")
+        return None
+    config = {
+        "source_path": getattr(dataset, "source_path", None),
+        "model_path": getattr(dataset, "model_path", None),
+        "lambda_converge": getattr(opt, "lambda_converge", None),
+        "converge_knn": getattr(opt, "converge_knn", None),
+        "converge_interval": getattr(opt, "converge_interval", None),
+    }
+    try:
+        
+        if opt.lambda_converge == 0:
+            run_name = os.path.basename(getattr(dataset, "source_path")) + "_noconv"
+        else:
+            run_name = os.path.basename(getattr(dataset, "source_path")) + "_lambda_" + str(opt.lambda_converge) + "_knn_" + str(opt.converge_knn) + "_interval_" + str(opt.converge_interval)
+
+        return wandb.init(
+            project="3dgs_convergence_regularization",
+            name= run_name,
+            config=config,
+            dir=getattr(dataset, "model_path", None),
+        )
+    except Exception as exc:
+        print(f"Failed to initialize wandb: {exc}")
+        return None
+
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
 
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
@@ -55,6 +92,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
+    wandb_run = init_wandb(dataset, opt)
     gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
@@ -146,11 +184,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             Ll1depth = Ll1depth.item()
         else:
             Ll1depth = 0
+
+        loss_before_converge = loss.detach()
+        converge_loss_value = None
         
         # Convergence regularization: encourage visible Gaussians to move closer to their local neighbors
         # This is computed only on the set of Gaussians that were visible in the current render (visibility_filter)
         # to limit cost. The term is: mean(||x_i - mean(neighbors(x_i))||^2)
-        if getattr(opt, 'lambda_converge', 0.0) > 0:
+        if iteration > 3000 and getattr(opt, 'lambda_converge', 0.0) > 0:
             converge_interval = int(getattr(opt, 'converge_interval', 10))
             if converge_interval > 0 and iteration % converge_interval == 0:
                 try:
@@ -192,6 +233,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                                         neighbors = visible_xyz[knn_idx]
                                     neighbor_mean = neighbors.mean(dim=1)
                                     converge_loss = (visible_xyz - neighbor_mean).pow(2).sum(dim=1).mean()
+                                    converge_loss_value = converge_loss.detach()
                                     loss = (1 - getattr(opt, 'lambda_converge', 0.0)) * loss + getattr(opt, 'lambda_converge', 0.0) * converge_loss
                 except Exception:
                     # fail-safe: if anything goes wrong (shapes, cuda) skip convergence loss for this iter
@@ -211,6 +253,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
+
+            if wandb_run:
+                wandb_log = {
+                    "loss/before_converge": loss_before_converge.item(),
+                    "loss/total": loss.item(),
+                }
+                if converge_loss_value is not None:
+                    wandb_log["loss/converge"] = converge_loss_value.item()
+                wandb_run.log(wandb_log, step=iteration)
 
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
@@ -247,6 +298,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+
+    if wandb_run:
+        wandb_run.finish()
 
 def prepare_output_and_logger(args):    
     if not args.model_path:

@@ -15,3 +15,27 @@ python train.py -s data\nerf_synthetic\nerf_synthetic\lego -m output\nerf_lego_c
 
 
 python train.py -s data\suitcase -m output\suitcase_convreg_0.5_interval_5_eval --eval --lambda_converge 0.5 --converge_interval 5 && python render.py -m output\suitcase_convreg_0.5_interval_5_eval --eval --skip_train && python metrics.py -m output\suitcase_convreg_0.5_interval_5_eval
+
+python train.py -s data\fire -m output\fire_convreg_0.5_interval_5_eval --eval --lambda_converge 0.5 --converge_interval 5 && python render.py -m output\fire_convreg_0.5_interval_5_eval --eval --skip_train && python metrics.py -m output\fire_convreg_0.5_interval_5_eval
+
+python train.py -s data\chair -m output\chair_noconv_eval --eval --lambda_converge 0.0 --converge_interval 0 && \
+python render.py -m output\chair_noconv_eval --eval --skip_train && \
+python metrics.py -m output\chair_noconv_eval && \
+python train.py -s data\chair -m output\chair_lambda_0.3_knn_5_interval_5 --eval --lambda_converge 0.3 --converge_knn 5 --converge_interval 5 && \
+python render.py -m output\chair_lambda_0.3_knn_5_interval_5 --eval --skip_train && \
+python metrics.py -m output\chair_lambda_0.3_knn_5_interval_5 && \
+python train.py -s data\chair -m output\chair_lambda_0.3_knn_10_interval_5 --eval --lambda_converge 0.3 --converge_knn 10 --converge_interval 5 && \
+python render.py -m output\chair_lambda_0.3_knn_10_interval_5 --eval --skip_train && \
+python metrics.py -m output\chair_lambda_0.3_knn_10_interval_5 && \
+python train.py -s data\chair -m output\chair_lambda_0.5_knn_5_interval_5 --eval --lambda_converge 0.5 --converge_knn 5 --converge_interval 5 && \
+python render.py -m output\chair_lambda_0.5_knn_5_interval_5 --eval --skip_train && \
+python metrics.py -m output\chair_lambda_0.5_knn_5_interval_5 && \
+python train.py -s data\chair -m output\chair_lambda_0.5_knn_10_interval_5 --eval --lambda_converge 0.5 --converge_knn 10 --converge_interval 5 && \
+python render.py -m output\chair_lambda_0.5_knn_10_interval_5 --eval --skip_train && \
+python metrics.py -m output\chair_lambda_0.5_knn_10_interval_5 && \
+python train.py -s data\chair -m output\chair_lambda_0.3_knn_5_interval_1 --eval --lambda_converge 0.3 --converge_knn 5 --converge_interval 1 && \
+python render.py -m output\chair_lambda_0.3_knn_5_interval_1 --eval --skip_train && \
+python metrics.py -m output\chair_lambda_0.3_knn_5_interval_1 && \
+python train.py -s data\chair -m output\chair_lambda_0.3_knn_10_interval_1 --eval --lambda_converge 0.3 --converge_knn 10 --converge_interval 1 && \
+python render.py -m output\chair_lambda_0.3_knn_10_interval_1 --eval --skip_train && \
+python metrics.py -m output\chair_lambda_0.3_knn_10_interval_1

@@ -10,3 +10,5 @@ output_videos
 data
 viewers
 .zip
+environment.yml
+nerf_synthetic
