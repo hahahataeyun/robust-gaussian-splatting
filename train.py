@@ -304,6 +304,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     end_time = time.time()
 
     wandb_run.summary["total_training_time_seconds"] = end_time - start_time
+    wandb_run.summary["total_number_of_gaussians"] = scene.gaussians.get_xyz.shape[0]
     if wandb_run:
         wandb_run.finish()
 

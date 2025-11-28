@@ -39,3 +39,7 @@ python metrics.py -m output\chair_lambda_0.3_knn_5_interval_1 && \
 python train.py -s data\chair -m output\chair_lambda_0.3_knn_10_interval_1 --eval --lambda_converge 0.3 --converge_knn 10 --converge_interval 1 && \
 python render.py -m output\chair_lambda_0.3_knn_10_interval_1 --eval --skip_train && \
 python metrics.py -m output\chair_lambda_0.3_knn_10_interval_1
+
+python train.py -s data\chair -m output\chair_lambda_0.5_knn_5_interval_1 --eval --lambda_converge 0.5 --converge_knn 5 --converge_interval 1 && \
+python render.py -m output\chair_lambda_0.5_knn_5_interval_1 --eval --skip_train && \
+python metrics.py -m output\chair_lambda_0.5_knn_5_interval_1 && \

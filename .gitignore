@@ -13,3 +13,4 @@ viewers
 environment.yml
 nerf_synthetic
 wandb/
+.yaml
