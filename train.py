@@ -22,7 +22,7 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
-
+import time
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -87,6 +87,7 @@ def init_wandb(dataset, opt):
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
 
+    start_time = time.time()
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
         sys.exit(f"Trying to use sparse adam but it is not installed, please install the correct rasterizer using pip install [3dgs_accel].")
 
@@ -258,6 +259,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 wandb_log = {
                     "loss/before_converge": loss_before_converge.item(),
                     "loss/total": loss.item(),
+                    "scene/num_gaussians": gaussians.get_xyz.shape[0],
                 }
                 if converge_loss_value is not None:
                     wandb_log["loss/converge"] = converge_loss_value.item()
@@ -299,6 +301,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
+    end_time = time.time()
+
+    wandb_run.summary["total_training_time_seconds"] = end_time - start_time
     if wandb_run:
         wandb_run.finish()
 
@@ -377,11 +382,11 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[3_000, 7_000, 30_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3_000, 7_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[3_000, 7_000, 30_000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
@@ -399,3 +404,4 @@ if __name__ == "__main__":
 
     # All done
     print("\nTraining complete.")
+    
