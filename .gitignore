@@ -9,8 +9,9 @@ screenshots
 output_videos
 data
 viewers
-.zip
+*.zip
 environment.yml
 nerf_synthetic
 wandb/
 .yaml
+experiment_results/
