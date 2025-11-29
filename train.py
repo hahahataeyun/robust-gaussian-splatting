@@ -22,7 +22,9 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+
 import time
+import math
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -84,6 +86,16 @@ def init_wandb(dataset, opt):
     except Exception as exc:
         print(f"Failed to initialize wandb: {exc}")
         return None
+
+def get_current_lambda_conv(step, target_lambda, decay_start, total_steps):
+    if step < 3000:
+        return 0.0
+    elif step < decay_start:
+        return target_lambda
+    elif step <= total_steps:
+        progress = (step - decay_start) / (total_steps - decay_start)
+        cosine_decay = 0.5 * (1 + math.cos(math.pi * progress))
+        return target_lambda * cosine_decay
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
 
@@ -192,7 +204,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Convergence regularization: encourage visible Gaussians to move closer to their local neighbors
         # This is computed only on the set of Gaussians that were visible in the current render (visibility_filter)
         # to limit cost. The term is: mean(||x_i - mean(neighbors(x_i))||^2)
-        if iteration > 3000 and getattr(opt, 'lambda_converge', 0.0) > 0:
+        target_lambda_converge = getattr(opt, 'lambda_converge', 0.0)
+
+        if iteration > 3000 and target_lambda_converge > 0:
             converge_interval = int(getattr(opt, 'converge_interval', 10))
             if converge_interval > 0 and iteration % converge_interval == 0:
                 try:
@@ -235,7 +249,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                                     neighbor_mean = neighbors.mean(dim=1)
                                     converge_loss = (visible_xyz - neighbor_mean).pow(2).sum(dim=1).mean()
                                     converge_loss_value = converge_loss.detach()
-                                    loss = (1 - getattr(opt, 'lambda_converge', 0.0)) * loss + getattr(opt, 'lambda_converge', 0.0) * converge_loss
+
+                                    current_lambda_conv = get_current_lambda_conv(iteration, target_lambda_converge, 20000, getattr(opt, "iterations", 30_000))
+                                    loss = (1 - current_lambda_conv) * loss + current_lambda_conv * converge_loss
+                                    # loss = (1 - getattr(opt, 'lambda_converge', 0.0)) * loss + getattr(opt, 'lambda_converge', 0.0) * converge_loss
                 except Exception:
                     # fail-safe: if anything goes wrong (shapes, cuda) skip convergence loss for this iter
                     pass
