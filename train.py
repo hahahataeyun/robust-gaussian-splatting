@@ -73,9 +73,12 @@ def init_wandb(dataset, opt):
     try:
         
         if opt.lambda_converge == 0:
-            run_name = os.path.basename(getattr(dataset, "source_path")) + "_noconv"
+            run_name = 'lc_' + os.path.basename(getattr(dataset, "source_path")) + "_noconv"
         else:
-            run_name = os.path.basename(getattr(dataset, "source_path")) + "_lambda_" + str(opt.lambda_converge) + "_knn_" + str(opt.converge_knn) + "_interval_" + str(opt.converge_interval)
+            if opt.merge_interval == 0:
+                run_name = 'lc_' + os.path.basename(getattr(dataset, "source_path")) + "_lambda_" + str(opt.lambda_converge) + "_knn_" + str(opt.converge_knn) + "_interval_" + str(opt.converge_interval)
+            else:
+                run_name = 'lc_merge_' + os.path.basename(getattr(dataset, "source_path")) + "_lambda_" + str(opt.lambda_converge) + "_knn_" + str(opt.converge_knn) + "_interval_" + str(opt.converge_interval)
 
         return wandb.init(
             project="3dgs_convergence_regularization",
@@ -251,12 +254,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                                     converge_loss_value = converge_loss.detach()
 
                                     current_lambda_conv = get_current_lambda_conv(iteration, target_lambda_converge, 20000, getattr(opt, "iterations", 30_000))
-                                    loss = (1 - current_lambda_conv) * loss + current_lambda_conv * converge_loss
-                                    # loss = (1 - getattr(opt, 'lambda_converge', 0.0)) * loss + getattr(opt, 'lambda_converge', 0.0) * converge_loss
+                                    loss = loss + current_lambda_conv * converge_loss
                 except Exception:
                     # fail-safe: if anything goes wrong (shapes, cuda) skip convergence loss for this iter
                     pass
- 
         loss.backward()
 
         iter_end.record()
@@ -301,6 +302,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
+
+            # Merge nearby, similar Gaussians every merge_interval iterations
+            if getattr(opt, "merge_interval", 0) > 0 and iteration % opt.merge_interval == 0:
+                if opt.merge_distance_threshold > 0 and opt.merge_sh_threshold > 0:
+                    merges_done = gaussians.merge_close_gaussians(
+                        opt.merge_distance_threshold,
+                        opt.merge_sh_threshold,
+                        max_merges=getattr(opt, "merge_max_per_iter", 1),
+                        chunk_size=getattr(opt, "merge_chunk_size", 4096),
+                    )
+                    if wandb_run and merges_done > 0:
+                        wandb_run.log({"scene/merges": merges_done}, step=iteration)
 
             # Optimizer step
             if iteration < opt.iterations:

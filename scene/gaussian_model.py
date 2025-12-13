@@ -65,6 +65,7 @@ class GaussianModel:
         self.percent_dense = 0
         self.spatial_lr_scale = 0
         self.setup_functions()
+        self.tmp_radii = None
 
     def capture(self):
         return (
@@ -313,6 +314,7 @@ class GaussianModel:
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
 
         self.active_sh_degree = self.max_sh_degree
+        self.tmp_radii = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
@@ -472,3 +474,101 @@ class GaussianModel:
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+
+    def _ensure_tmp_radii(self):
+        if self.tmp_radii is None:
+            self.tmp_radii = torch.zeros((self.get_xyz.shape[0]), device=self._xyz.device)
+
+    def _find_merge_candidate(self, distance_threshold, sh_threshold, chunk_size):
+        xyz = self.get_xyz
+        sh_all = torch.cat((self._features_dc, self._features_rest), dim=1).reshape(self._features_dc.shape[0], -1)
+        n = xyz.shape[0]
+        best_pair = None
+        best_dist = None
+
+        for start in range(0, n, chunk_size):
+            end = min(start + chunk_size, n)
+            dist_block = torch.cdist(xyz[start:end], xyz)
+            diag = torch.arange(end - start, device=xyz.device)
+            dist_block[diag, start + diag] = float("inf")
+
+            candidate_mask = dist_block <= distance_threshold
+            if not candidate_mask.any():
+                continue
+
+            rows, cols = candidate_mask.nonzero(as_tuple=True)
+            sh_diff = torch.norm(sh_all[start + rows] - sh_all[cols], dim=1)
+            valid = sh_diff <= sh_threshold
+            if not valid.any():
+                continue
+
+            valid_rows = rows[valid]
+            valid_cols = cols[valid]
+            valid_dists = dist_block[valid_rows, valid_cols]
+
+            min_idx = torch.argmin(valid_dists)
+            candidate_dist = valid_dists[min_idx]
+            candidate_pair = (start + valid_rows[min_idx].item(), valid_cols[min_idx].item())
+
+            if best_dist is None or candidate_dist < best_dist:
+                best_dist = candidate_dist
+                best_pair = candidate_pair
+
+        return best_pair
+
+    def _merge_pair(self, idx_a, idx_b):
+        # Compute merged attributes
+        xyz_new = self._xyz[[idx_a, idx_b]].mean(dim=0, keepdim=True)
+        f_dc_new = self._features_dc[[idx_a, idx_b]].mean(dim=0, keepdim=True)
+        f_rest_new = self._features_rest[[idx_a, idx_b]].mean(dim=0, keepdim=True)
+        opacity_new = self._opacity[[idx_a, idx_b]].mean(dim=0, keepdim=True)
+        scaling_new = self._scaling[[idx_a, idx_b]].mean(dim=0, keepdim=True)
+        rotation_new = self._rotation[[idx_a, idx_b]].mean(dim=0, keepdim=True)
+        rotation_new = self.rotation_activation(rotation_new)
+
+        remove_mask = torch.zeros((self.get_xyz.shape[0]), dtype=bool, device=self._xyz.device)
+        remove_mask[idx_a] = True
+        remove_mask[idx_b] = True
+
+        self._ensure_tmp_radii()
+        self.prune_points(remove_mask)
+
+        d = {
+            "xyz": xyz_new,
+            "f_dc": f_dc_new,
+            "f_rest": f_rest_new,
+            "opacity": opacity_new,
+            "scaling": scaling_new,
+            "rotation": rotation_new,
+        }
+        optimizable_tensors = self.cat_tensors_to_optimizer(d)
+        self._xyz = optimizable_tensors["xyz"]
+        self._features_dc = optimizable_tensors["f_dc"]
+        self._features_rest = optimizable_tensors["f_rest"]
+        self._opacity = optimizable_tensors["opacity"]
+        self._scaling = optimizable_tensors["scaling"]
+        self._rotation = optimizable_tensors["rotation"]
+
+        zeros_device = self._xyz.device
+        self.tmp_radii = torch.cat((self.tmp_radii, torch.zeros((1,), device=zeros_device)), dim=0)
+        self.xyz_gradient_accum = torch.cat((self.xyz_gradient_accum, torch.zeros((1, 1), device=zeros_device)), dim=0)
+        self.denom = torch.cat((self.denom, torch.zeros((1, 1), device=zeros_device)), dim=0)
+        self.max_radii2D = torch.cat((self.max_radii2D, torch.zeros((1,), device=zeros_device)), dim=0)
+
+    def merge_close_gaussians(self, distance_threshold, sh_threshold, max_merges=1, chunk_size=4096):
+        if self.get_xyz.shape[0] < 2:
+            return 0
+
+        merges_done = 0
+        while merges_done < max_merges and self.get_xyz.shape[0] > 1:
+            candidate = self._find_merge_candidate(distance_threshold, sh_threshold, chunk_size)
+            if candidate is None:
+                break
+            idx_a, idx_b = candidate
+            if idx_a == idx_b:
+                break
+            self._merge_pair(idx_a, idx_b)
+            merges_done += 1
+
+        self.tmp_radii = None
+        return merges_done
