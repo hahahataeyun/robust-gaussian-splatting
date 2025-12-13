@@ -11,11 +11,13 @@
 
 import os
 import torch
+import numpy as np
 from random import randint
 from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
+from scene.dataset_readers import fetchPly
 from utils.general_utils import safe_state, get_expon_lr_func
 import uuid
 from tqdm import tqdm
@@ -75,7 +77,7 @@ def init_wandb(dataset, opt):
         if opt.lambda_converge == 0:
             run_name = os.path.basename(getattr(dataset, "source_path")) + "_noconv"
         else:
-            run_name = os.path.basename(getattr(dataset, "source_path")) + "_lambda_" + str(opt.lambda_converge) + "_knn_" + str(opt.converge_knn) + "_interval_" + str(opt.converge_interval)
+            run_name = "sfmreg_" + os.path.basename(getattr(dataset, "source_path")) + "_lambda_" + str(opt.lambda_converge) + "_interval_" + str(opt.converge_interval)
 
         return wandb.init(
             project="3dgs_convergence_regularization",
@@ -87,15 +89,15 @@ def init_wandb(dataset, opt):
         print(f"Failed to initialize wandb: {exc}")
         return None
 
-def get_current_lambda_conv(step, target_lambda, decay_start, total_steps):
-    if step < 3000:
-        return 0.0
-    elif step < decay_start:
+def get_current_lambda_conv(step, target_lambda, decay_start, decay_end, total_steps):
+    if step < decay_start:
         return target_lambda
-    elif step <= total_steps:
-        progress = (step - decay_start) / (total_steps - decay_start)
+    elif step < decay_end:
+        progress = (step - decay_start) / (decay_end - decay_start)
         cosine_decay = 0.5 * (1 + math.cos(math.pi * progress))
         return target_lambda * cosine_decay
+    elif step <= total_steps:
+        return 0.0
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
 
@@ -109,6 +111,37 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
+
+    # Preload SfM point cloud for convergence regularization (nearest-SfM distance)
+    sfm_xyz = None
+    sfm_threshold = None
+    sfm_spacing_factor = float(getattr(opt, "sfm_spacing_factor", 2.5))  # use 2~3x mean spacing; default 2.5
+    try:
+        sfm_ply_path = os.path.join(dataset.source_path, "sparse/0/points3D.ply")
+        if not os.path.exists(sfm_ply_path):
+            fallback_ply = os.path.join(scene.model_path, "input.ply")
+            sfm_ply_path = fallback_ply if os.path.exists(fallback_ply) else sfm_ply_path
+
+        if os.path.exists(sfm_ply_path):
+            sfm_pcd = fetchPly(sfm_ply_path)
+            sfm_np = np.asarray(sfm_pcd.points)
+            if sfm_np.size > 0:
+                sfm_xyz = torch.tensor(sfm_np, device="cuda", dtype=torch.float32)
+                # Estimate mean nearest-neighbor spacing from a random subset to set the gating threshold
+                subset_size = min(5000, sfm_xyz.shape[0])
+                if subset_size > 1:
+                    perm = torch.randperm(sfm_xyz.shape[0], device=sfm_xyz.device)[:subset_size]
+                    subset = sfm_xyz[perm]
+                    dist_mat = torch.cdist(subset, subset)
+                    dist_mat.fill_diagonal_(float("inf"))
+                    nn_dists = dist_mat.min(dim=1).values
+                    mean_spacing = nn_dists.mean()
+                    sfm_threshold = mean_spacing * sfm_spacing_factor
+    except Exception:
+        # If anything fails, fall back to disabling the SfM-based regularization
+        sfm_xyz = None
+        sfm_threshold = None
+
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
@@ -205,8 +238,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # This is computed only on the set of Gaussians that were visible in the current render (visibility_filter)
         # to limit cost. The term is: mean(||x_i - mean(neighbors(x_i))||^2)
         target_lambda_converge = getattr(opt, 'lambda_converge', 0.0)
+        current_lambda_conv = get_current_lambda_conv(iteration, target_lambda_converge, 3000, 20000, getattr(opt, "iterations", 30_000))
 
-        if iteration > 3000 and target_lambda_converge > 0:
+        if current_lambda_conv > 0 and sfm_xyz is not None and sfm_threshold is not None:
             converge_interval = int(getattr(opt, 'converge_interval', 10))
             if converge_interval > 0 and iteration % converge_interval == 0:
                 try:
@@ -229,30 +263,23 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                             if max_points > 0 and visible_xyz.shape[0] > max_points:
                                 perm = torch.randperm(visible_xyz.shape[0], device=visible_xyz.device) # if too many points, randomly subsample
                                 visible_xyz = visible_xyz.index_select(0, perm[:max_points]) # (max_points, 3)
-                            V = visible_xyz.shape[0] # number of visible points considered
-                            if V > 1:
-                                k = min(int(getattr(opt, 'converge_knn', 5)), V - 1) # number of neighbors
-                                if k > 0:
-                                    neighbors = None
-                                    if FAST_KNN_AVAILABLE:
-                                        print("Using fast knn for convergence loss")
-                                        try:
-                                            knn_idx = fast_knn_idx(visible_xyz, k)
-                                            neighbors = visible_xyz[knn_idx]
-                                        except Exception:
-                                            neighbors = None
-                                    if neighbors is None:
-                                        dists = torch.cdist(visible_xyz, visible_xyz, p=2)
-                                        dists.fill_diagonal_(float('inf'))
-                                        knn_idx = torch.topk(dists, k=k, largest=False).indices
-                                        neighbors = visible_xyz[knn_idx]
-                                    neighbor_mean = neighbors.mean(dim=1)
-                                    converge_loss = (visible_xyz - neighbor_mean).pow(2).sum(dim=1).mean()
+                            V = visible_xyz.shape[0]  # number of visible points considered
+                            if V > 0:
+                                # Compute nearest SfM point distance; skip if nearest is too far (gated by sfm_threshold)
+                                min_dists = []
+                                chunk_size = 2048
+                                for start in range(0, V, chunk_size):
+                                    end = min(start + chunk_size, V)
+                                    q = visible_xyz[start:end]
+                                    d = torch.cdist(q, sfm_xyz)
+                                    min_dists.append(d.min(dim=1).values)
+                                min_dists = torch.cat(min_dists, dim=0)
+                                valid_mask = min_dists < sfm_threshold
+                                if valid_mask.any():
+                                    converge_loss = (min_dists[valid_mask] ** 2).mean()
                                     converge_loss_value = converge_loss.detach()
 
-                                    current_lambda_conv = get_current_lambda_conv(iteration, target_lambda_converge, 20000, getattr(opt, "iterations", 30_000))
-                                    loss = (1 - current_lambda_conv) * loss + current_lambda_conv * converge_loss
-                                    # loss = (1 - getattr(opt, 'lambda_converge', 0.0)) * loss + getattr(opt, 'lambda_converge', 0.0) * converge_loss
+                                    loss = loss + current_lambda_conv * converge_loss
                 except Exception:
                     # fail-safe: if anything goes wrong (shapes, cuda) skip convergence loss for this iter
                     pass

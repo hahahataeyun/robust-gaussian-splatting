@@ -15,3 +15,4 @@ nerf_synthetic
 wandb/
 .yaml
 experiment_results/
+commands/
