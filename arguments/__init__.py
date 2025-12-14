@@ -105,6 +105,12 @@ class OptimizationParams(ParamGroup):
         self.converge_max_points = 4096
         self.random_background = False
         self.optimizer_type = "default"
+        # Merge settings
+        self.merge_interval = 200
+        self.merge_distance_threshold = 0.005
+        self.merge_sh_threshold = 0.1
+        self.merge_max_per_iter = 10
+        self.merge_chunk_size = 4096
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

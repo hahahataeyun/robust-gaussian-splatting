@@ -71,13 +71,17 @@ def init_wandb(dataset, opt):
         "lambda_converge": getattr(opt, "lambda_converge", None),
         "converge_knn": getattr(opt, "converge_knn", None),
         "converge_interval": getattr(opt, "converge_interval", None),
+        "merge_interval": getattr(opt, "merge_interval", None),
     }
     try:
         
         if opt.lambda_converge == 0:
             run_name = os.path.basename(getattr(dataset, "source_path")) + "_noconv"
         else:
-            run_name = "sfmreg_" + os.path.basename(getattr(dataset, "source_path")) + "_lambda_" + str(opt.lambda_converge) + "_interval_" + str(opt.converge_interval)
+            run_name = ("sfmreg_" + os.path.basename(getattr(dataset, "source_path")) + 
+                        "_lambda_" + str(opt.lambda_converge) + 
+                        "_convinterval_" + str(opt.converge_interval) +
+                        "_mergeinterval_" + str(opt.merge_interval))
 
         return wandb.init(
             project="3dgs_convergence_regularization",
@@ -328,6 +332,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
+
+            # Merge nearby, similar Gaussians every merge_interval iterations
+            if getattr(opt, "merge_interval", 0) > 0 and iteration % opt.merge_interval == 0 and iteration < 7_000:
+                if opt.merge_distance_threshold > 0 and opt.merge_sh_threshold > 0:
+                    merges_done = gaussians.merge_close_gaussians(
+                        opt.merge_distance_threshold,
+                        opt.merge_sh_threshold,
+                        max_merges=getattr(opt, "merge_max_per_iter", 1),
+                        chunk_size=getattr(opt, "merge_chunk_size", 4096),
+                    )
+                    if wandb_run and merges_done > 0:
+                        wandb_run.log({"scene/merges": merges_done}, step=iteration)
 
             # Optimizer step
             if iteration < opt.iterations:
