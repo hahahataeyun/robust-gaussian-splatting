@@ -69,6 +69,7 @@ def init_wandb(dataset, opt):
         "lambda_converge": getattr(opt, "lambda_converge", None),
         "converge_knn": getattr(opt, "converge_knn", None),
         "converge_interval": getattr(opt, "converge_interval", None),
+        "merge_interval": getattr(opt, "merge_interval", None),
     }
     try:
         
@@ -76,9 +77,17 @@ def init_wandb(dataset, opt):
             run_name = 'lc_' + os.path.basename(getattr(dataset, "source_path")) + "_noconv"
         else:
             if opt.merge_interval == 0:
-                run_name = 'lc_' + os.path.basename(getattr(dataset, "source_path")) + "_lambda_" + str(opt.lambda_converge) + "_knn_" + str(opt.converge_knn) + "_interval_" + str(opt.converge_interval)
+                run_name = ('lc_' + os.path.basename(getattr(dataset, "source_path")) + 
+                            "_lambda_" + str(opt.lambda_converge) + 
+                            "_knn_" + str(opt.converge_knn) + 
+                            "_convinterval_" + str(opt.converge_interval)
+                            + "_nomerge")
             else:
-                run_name = 'lc_merge_' + os.path.basename(getattr(dataset, "source_path")) + "_lambda_" + str(opt.lambda_converge) + "_knn_" + str(opt.converge_knn) + "_interval_" + str(opt.converge_interval)
+                run_name = ('lc_' + os.path.basename(getattr(dataset, "source_path")) + 
+                            "_lambda_" + str(opt.lambda_converge) + 
+                            "_knn_" + str(opt.converge_knn) + 
+                            "_convinterval_" + str(opt.converge_interval)
+                            + "_mergeinterval_" + str(opt.merge_interval))
 
         return wandb.init(
             project="3dgs_convergence_regularization",
@@ -304,7 +313,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     gaussians.reset_opacity()
 
             # Merge nearby, similar Gaussians every merge_interval iterations
-            if getattr(opt, "merge_interval", 0) > 0 and iteration % opt.merge_interval == 0:
+            if getattr(opt, "merge_interval", 0) > 0 and iteration % opt.merge_interval == 0 and iteration < 7_000:
                 if opt.merge_distance_threshold > 0 and opt.merge_sh_threshold > 0:
                     merges_done = gaussians.merge_close_gaussians(
                         opt.merge_distance_threshold,

@@ -479,67 +479,111 @@ class GaussianModel:
         if self.tmp_radii is None:
             self.tmp_radii = torch.zeros((self.get_xyz.shape[0]), device=self._xyz.device)
 
-    def _find_merge_candidate(self, distance_threshold, sh_threshold, chunk_size):
+    def merge_close_gaussians(self, distance_threshold, sh_threshold, max_merges=1, chunk_size=4096):
+        """
+        Spatial hashing merge: bucket Gaussians into a 3D grid (cell size = distance_threshold),
+        then merge buckets with >=2 points using opacity-weighted averages.
+        The sh_threshold and chunk_size arguments are kept for API compatibility but unused.
+        """
+        if distance_threshold <= 0 or max_merges <= 0 or self.get_xyz.shape[0] < 2:
+            self.tmp_radii = None
+            return 0
+
         xyz = self.get_xyz
-        sh_all = torch.cat((self._features_dc, self._features_rest), dim=1).reshape(self._features_dc.shape[0], -1)
-        n = xyz.shape[0]
-        best_pair = None
-        best_dist = None
+        device = xyz.device
+        grid_size = distance_threshold
 
-        for start in range(0, n, chunk_size):
-            end = min(start + chunk_size, n)
-            dist_block = torch.cdist(xyz[start:end], xyz)
-            diag = torch.arange(end - start, device=xyz.device)
-            dist_block[diag, start + diag] = float("inf")
+        # 1) Quantize positions to grid
+        quantized = torch.round(xyz / grid_size).long()
 
-            candidate_mask = dist_block <= distance_threshold
-            if not candidate_mask.any():
+        # 2) Unique keys and grouping
+        unique_keys, inverse_indices, counts = torch.unique(quantized, dim=0, return_inverse=True, return_counts=True)
+        candidate_unique = torch.nonzero(counts >= 2, as_tuple=False).squeeze(-1)
+        if candidate_unique.numel() == 0:
+            self.tmp_radii = None
+            return 0
+
+        # Prioritize larger clusters first
+        candidate_sizes = counts[candidate_unique]
+        order = torch.argsort(candidate_sizes, descending=True)
+        candidate_unique = candidate_unique[order]
+
+        groups = []
+        merges_done = 0  # counts how many clusters we actually merge
+        total_merged = 0  # number of Gaussians removed (for logging)
+        for unique_idx in candidate_unique:
+            if merges_done >= max_merges:
+                break
+            group_idx = torch.nonzero(inverse_indices == unique_idx, as_tuple=False).squeeze(-1)
+            if group_idx.numel() < 2:
                 continue
+            groups.append(group_idx)
+            merges_done += 1
+            total_merged += group_idx.numel() - 1
 
-            rows, cols = candidate_mask.nonzero(as_tuple=True)
-            sh_diff = torch.norm(sh_all[start + rows] - sh_all[cols], dim=1)
-            valid = sh_diff <= sh_threshold
-            if not valid.any():
-                continue
+        if len(groups) == 0:
+            self.tmp_radii = None
+            return 0
 
-            valid_rows = rows[valid]
-            valid_cols = cols[valid]
-            valid_dists = dist_block[valid_rows, valid_cols]
-
-            min_idx = torch.argmin(valid_dists)
-            candidate_dist = valid_dists[min_idx]
-            candidate_pair = (start + valid_rows[min_idx].item(), valid_cols[min_idx].item())
-
-            if best_dist is None or candidate_dist < best_dist:
-                best_dist = candidate_dist
-                best_pair = candidate_pair
-
-        return best_pair
-
-    def _merge_pair(self, idx_a, idx_b):
-        # Compute merged attributes
-        xyz_new = self._xyz[[idx_a, idx_b]].mean(dim=0, keepdim=True)
-        f_dc_new = self._features_dc[[idx_a, idx_b]].mean(dim=0, keepdim=True)
-        f_rest_new = self._features_rest[[idx_a, idx_b]].mean(dim=0, keepdim=True)
-        opacity_new = self._opacity[[idx_a, idx_b]].mean(dim=0, keepdim=True)
-        scaling_new = self._scaling[[idx_a, idx_b]].mean(dim=0, keepdim=True)
-        rotation_new = self._rotation[[idx_a, idx_b]].mean(dim=0, keepdim=True)
-        rotation_new = self.rotation_activation(rotation_new)
-
-        remove_mask = torch.zeros((self.get_xyz.shape[0]), dtype=bool, device=self._xyz.device)
-        remove_mask[idx_a] = True
-        remove_mask[idx_b] = True
+        # 3/4) Opacity-weighted averages per group
+        new_xyz_list = []
+        new_fdc_list = []
+        new_frest_list = []
+        new_opacity_list = []
+        new_scaling_list = []
+        new_rot_list = []
 
         self._ensure_tmp_radii()
+        remove_mask = torch.zeros((self.get_xyz.shape[0]), dtype=bool, device=device)
+
+        for group_idx in groups:
+            remove_mask[group_idx] = True
+
+            weights = self.get_opacity[group_idx].clamp_min(1e-6)  # (k, 1)
+            weight_sum = weights.sum(dim=0, keepdim=True).clamp_min(1e-6)  # (1, 1)
+
+            xyz_new = (weights * xyz[group_idx]).sum(dim=0, keepdim=True) / weight_sum
+
+            scaling_lin = self.get_scaling[group_idx]
+            scaling_new_lin = (weights * scaling_lin).sum(dim=0, keepdim=True) / weight_sum
+            scaling_new = self.scaling_inverse_activation(scaling_new_lin)
+
+            rot_raw = (weights * self._rotation[group_idx]).sum(dim=0, keepdim=True) / weight_sum
+            rotation_new = self.rotation_activation(rot_raw)
+
+            weights_feat = weights.view(-1, 1, 1)
+            f_dc_new = (weights_feat * self._features_dc[group_idx]).sum(dim=0, keepdim=True) / weight_sum
+            f_rest_new = (weights_feat * self._features_rest[group_idx]).sum(dim=0, keepdim=True) / weight_sum
+
+            opacity_lin = self.get_opacity[group_idx]
+            opacity_mean = opacity_lin.mean(dim=0, keepdim=True).clamp(1e-4, 1 - 1e-4)
+            opacity_new = self.inverse_opacity_activation(opacity_mean)
+
+            new_xyz_list.append(xyz_new)
+            new_scaling_list.append(scaling_new)
+            new_rot_list.append(rotation_new)
+            new_fdc_list.append(f_dc_new)
+            new_frest_list.append(f_rest_new)
+            new_opacity_list.append(opacity_new)
+
+        # Remove old points in all merged groups
         self.prune_points(remove_mask)
 
+        # Append merged Gaussians as new entries
+        new_xyz = torch.cat(new_xyz_list, dim=0)
+        new_fdc = torch.cat(new_fdc_list, dim=0)
+        new_frest = torch.cat(new_frest_list, dim=0)
+        new_opacity = torch.cat(new_opacity_list, dim=0)
+        new_scaling = torch.cat(new_scaling_list, dim=0)
+        new_rotation = torch.cat(new_rot_list, dim=0)
+
         d = {
-            "xyz": xyz_new,
-            "f_dc": f_dc_new,
-            "f_rest": f_rest_new,
-            "opacity": opacity_new,
-            "scaling": scaling_new,
-            "rotation": rotation_new,
+            "xyz": new_xyz,
+            "f_dc": new_fdc,
+            "f_rest": new_frest,
+            "opacity": new_opacity,
+            "scaling": new_scaling,
+            "rotation": new_rotation,
         }
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
         self._xyz = optimizable_tensors["xyz"]
@@ -550,25 +594,11 @@ class GaussianModel:
         self._rotation = optimizable_tensors["rotation"]
 
         zeros_device = self._xyz.device
-        self.tmp_radii = torch.cat((self.tmp_radii, torch.zeros((1,), device=zeros_device)), dim=0)
-        self.xyz_gradient_accum = torch.cat((self.xyz_gradient_accum, torch.zeros((1, 1), device=zeros_device)), dim=0)
-        self.denom = torch.cat((self.denom, torch.zeros((1, 1), device=zeros_device)), dim=0)
-        self.max_radii2D = torch.cat((self.max_radii2D, torch.zeros((1,), device=zeros_device)), dim=0)
-
-    def merge_close_gaussians(self, distance_threshold, sh_threshold, max_merges=1, chunk_size=4096):
-        if self.get_xyz.shape[0] < 2:
-            return 0
-
-        merges_done = 0
-        while merges_done < max_merges and self.get_xyz.shape[0] > 1:
-            candidate = self._find_merge_candidate(distance_threshold, sh_threshold, chunk_size)
-            if candidate is None:
-                break
-            idx_a, idx_b = candidate
-            if idx_a == idx_b:
-                break
-            self._merge_pair(idx_a, idx_b)
-            merges_done += 1
+        new_count = new_xyz.shape[0]
+        self.tmp_radii = torch.cat((self.tmp_radii, torch.zeros((new_count,), device=zeros_device)), dim=0)
+        self.xyz_gradient_accum = torch.cat((self.xyz_gradient_accum, torch.zeros((new_count, 1), device=zeros_device)), dim=0)
+        self.denom = torch.cat((self.denom, torch.zeros((new_count, 1), device=zeros_device)), dim=0)
+        self.max_radii2D = torch.cat((self.max_radii2D, torch.zeros((new_count,), device=zeros_device)), dim=0)
 
         self.tmp_radii = None
-        return merges_done
+        return int(total_merged)
