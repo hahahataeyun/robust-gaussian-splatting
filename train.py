@@ -70,6 +70,7 @@ def init_wandb(dataset, opt):
         "converge_knn": getattr(opt, "converge_knn", None),
         "converge_interval": getattr(opt, "converge_interval", None),
         "merge_interval": getattr(opt, "merge_interval", None),
+        "max_merge": getattr(opt, "merge_max_per_iter", None),
     }
     try:
         
@@ -77,17 +78,16 @@ def init_wandb(dataset, opt):
             run_name = 'lc_' + os.path.basename(getattr(dataset, "source_path")) + "_noconv"
         else:
             if opt.merge_interval == 0:
-                run_name = ('lc_' + os.path.basename(getattr(dataset, "source_path")) + 
+                run_name = ('1215_convreg_' + os.path.basename(getattr(dataset, "source_path")) + 
                             "_lambda_" + str(opt.lambda_converge) + 
-                            "_knn_" + str(opt.converge_knn) + 
-                            "_convinterval_" + str(opt.converge_interval)
-                            + "_nomerge")
+                            "_nomerge"
+                            )
             else:
-                run_name = ('lc_' + os.path.basename(getattr(dataset, "source_path")) + 
+                run_name = ('1215_convreg_' + os.path.basename(getattr(dataset, "source_path")) + 
                             "_lambda_" + str(opt.lambda_converge) + 
-                            "_knn_" + str(opt.converge_knn) + 
-                            "_convinterval_" + str(opt.converge_interval)
-                            + "_mergeinterval_" + str(opt.merge_interval))
+                            "_mergeinterval_" + str(opt.merge_interval) + 
+                            "_maxmerge_" + str(opt.max_merge)
+                            )
 
         return wandb.init(
             project="3dgs_convergence_regularization",
@@ -219,7 +219,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         target_lambda_converge = getattr(opt, 'lambda_converge', 0.0)
 
         if iteration > 3000 and target_lambda_converge > 0:
-            converge_interval = int(getattr(opt, 'converge_interval', 10))
+            converge_interval = int(getattr(opt, 'converge_interval', 1))
             if converge_interval > 0 and iteration % converge_interval == 0:
                 try:
                     vis_filter = visibility_filter
@@ -243,7 +243,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                                 visible_xyz = visible_xyz.index_select(0, perm[:max_points]) # (max_points, 3)
                             V = visible_xyz.shape[0] # number of visible points considered
                             if V > 1:
-                                k = min(int(getattr(opt, 'converge_knn', 5)), V - 1) # number of neighbors
+                                k = min(int(getattr(opt, 'converge_knn', 10)), V - 1) # number of neighbors
                                 if k > 0:
                                     neighbors = None
                                     if FAST_KNN_AVAILABLE:
@@ -313,12 +313,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     gaussians.reset_opacity()
 
             # Merge nearby, similar Gaussians every merge_interval iterations
-            if getattr(opt, "merge_interval", 0) > 0 and iteration % opt.merge_interval == 0 and iteration < 7_000:
+            if getattr(opt, "merge_interval", 0) > 0 and iteration < opt.densify_until_iter and iteration > opt.densify_from_iter and iteration % opt.merge_interval == 0 :
                 if opt.merge_distance_threshold > 0 and opt.merge_sh_threshold > 0:
                     merges_done = gaussians.merge_close_gaussians(
                         opt.merge_distance_threshold,
                         opt.merge_sh_threshold,
-                        max_merges=getattr(opt, "merge_max_per_iter", 1),
+                        max_merges=getattr(opt, "max_merge", 1),
                         chunk_size=getattr(opt, "merge_chunk_size", 4096),
                     )
                     if wandb_run and merges_done > 0:
@@ -422,8 +422,8 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[3_000, 7_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3_000, 7_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[3_000, 6_000, 7_000, 9_000, 12_000, 15_000, 18_000, 21_000, 24_000, 27_000, 30_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3_000, 6_000, 7_000, 9_000, 12_000, 15_000, 18_000, 21_000, 24_000, 27_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[3_000, 7_000, 30_000])

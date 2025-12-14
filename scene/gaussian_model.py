@@ -494,7 +494,7 @@ class GaussianModel:
         grid_size = distance_threshold
 
         # 1) Quantize positions to grid
-        quantized = torch.round(xyz / grid_size).long()
+        quantized = torch.round(xyz / grid_size).long() # size (N, 3)
 
         # 2) Unique keys and grouping
         unique_keys, inverse_indices, counts = torch.unique(quantized, dim=0, return_inverse=True, return_counts=True)
