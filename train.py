@@ -79,10 +79,11 @@ def init_wandb(dataset, opt):
         if opt.lambda_converge == 0:
             run_name = os.path.basename(getattr(dataset, "source_path")) + "_noconv"
         else:
-            run_name = ("sfmreg_" + os.path.basename(getattr(dataset, "source_path")) + 
+            run_name = ("1215_sfmreg_" + os.path.basename(getattr(dataset, "source_path")) + 
                         "_lambda_" + str(opt.lambda_converge) + 
-                        "_convinterval_" + str(opt.converge_interval) +
-                        "_mergeinterval_" + str(opt.merge_interval))
+                        "_mergeinterval_" + str(opt.merge_interval) +
+                        "_maxmerge_" + str(opt.max_merge)
+                        )
 
         return wandb.init(
             project="3dgs_convergence_regularization",
@@ -444,11 +445,11 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[3_000, 6_000, 7_000, 9_000, 12_000, 15_000, 18_000, 21_000, 24_000, 27_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3_000, 6_000, 7_000, 9_000, 12_000, 15_000, 18_000, 21_000, 24_000, 27_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[3_000, 6_000, 7_000, 9_000, 12_000, 15_000, 18_000, 21_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3_000, 6_000, 7_000, 9_000, 12_000, 15_000, 18_000, 21_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[3_000, 7_000, 30_000])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[3_000, 7_000, 21_000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)

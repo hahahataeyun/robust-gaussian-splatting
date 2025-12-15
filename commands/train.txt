@@ -48,8 +48,39 @@ python -c "print("hello world")
 python train.py -s data\cleaner -m output\sfmreg_cleaner_lambda_5.0_interval_1 --eval --lambda_converge 5.0 --converge_interval 1 --merge_interval 200 && \
 python render.py -m output\sfmreg_cleaner_lambda_5.0_interval_1 --eval --skip_train && \
 python metrics.py -m output\sfmreg_cleaner_lambda_5.0_interval_1 && \
-python -c "print("hello world")
+python -c "print("hello world")"
 
 
-###
-python train.py -s data\chair -m output\1215_convreg\chair_lambda_0.3_maxmerge_100_merge_interval_200 --eval --lambda_converge 0.3 --converge_knn 10 --converge_interval 1 --merge_interval 200 --max_merge 100
+### convreg
+python train.py -s data\chair -m output\1215_convreg\chair_lambda_0.3_maxmerge_100_merge_interval_200 --eval --lambda_converge 0.3 --converge_knn 10 --converge_interval 1 --merge_interval 200 --max_merge 100 && \
+python render.py -m output\1215_convreg\chair_lambda_0.3_maxmerge_100_merge_interval_200 -s data\chair --eval --skip_train --iteration 21000 && \
+python metrics.py -m output\1215_convreg\chair_lambda_0.3_maxmerge_100_merge_interval_200 && \
+
+
+### sfmreg
+python train.py -s data\chair -m output\1215_sfmreg\chair_lambda_1.0_maxmerge_100_merge_interval_200 --eval --lambda_converge 1.0 --converge_interval 1 --merge_interval 200 --max_merge 100 && \
+python train.py -s data\chair -m output\1215_sfmreg\chair_lambda_1.0_maxmerge_100_merge_interval_100 --eval --lambda_converge 1.0 --converge_interval 1 --merge_interval 100 --max_merge 100 && \
+python train.py -s data\chair -m output\1215_sfmreg\chair_lambda_1.0_maxmerge_100_merge_interval_50 --eval --lambda_converge 1.0 --converge_interval 1 --merge_interval 50 --max_merge 100 && \
+
+python train.py -s data\chair -m output\1215_sfmreg\chair_noconv --eval --lambda_converge 0.0 --merge_interval 0 && \
+python render.py -m output\1215_sfmreg\chair_noconv -s data\chair --eval --skip_train --iteration 21000 && \
+python metrics.py -m output\1215_sfmreg\chair_noconv && \
+python -c "print("hello world")"
+
+
+
+python train.py -s data\chair -m output\1215_sfmreg\chair_lambda_0.0_maxmerge_100_merge_interval_100 --eval --lambda_converge 5.0 --converge_interval 1 --max_merge 100 --merge_interval 50 && \
+python render.py -m output\1215_sfmreg\chair_lambda_0.0_maxmerge_100_merge_interval_100 -s data\chair --eval --skip_train --iteration 21000 && \
+python render.py -m output\1215_sfmreg\chair_lambda_0.0_maxmerge_100_merge_interval_100 -s data\chair --eval --skip_train --iteration 30000 && \
+python metrics.py -m output\1215_sfmreg\ch air_lambda_0.0_maxmerge_100_merge_interval_100 && \
+python -c "print("hello world")"
+
+
+
+python train.py -s data\chair -m output\1215_sfmreg\chair_lambda_5.0_maxmerge_100_merge_interval_100 --eval --lambda_converge 5.0 --converge_interval 1 --merge_interval 100 --max_merge 100 && \
+python train.py -s data\chair -m output\1215_sfmreg\chair_lambda_5.0_maxmerge_100_merge_interval_50 --eval --lambda_converge 5.0 --converge_interval 1 --merge_interval 50 --max_merge 100 && \
+
+python train.py -s data\chair -m output\1215_sfmreg\chair_lambda_10.0_maxmerge_100_merge_interval_200 --eval --lambda_converge 10.0 --converge_interval 1 --merge_interval 200 --max_merge 100 && \
+python train.py -s data\chair -m output\1215_sfmreg\chair_lambda_10.0_maxmerge_100_merge_interval_100 --eval --lambda_converge 10.0 --converge_interval 1 --merge_interval 100 --max_merge 100 && \
+python train.py -s data\chair -m output\1215_sfmreg\chair_lambda_10.0_maxmerge_100_merge_interval_50 --eval --lambda_converge 10.0 --converge_interval 1 --merge_interval 50 --max_merge 100 && \
+python -c "print("hello world")"
